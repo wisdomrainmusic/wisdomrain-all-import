@@ -84,6 +84,15 @@ class WRAI_Importer {
      * Perform the full import: create/update products and their variations.
      */
     public function handle_full_import() {
+        $log_entries = [
+            'parents_created'    => 0,
+            'parents_updated'    => 0,
+            'variations_created' => 0,
+            'attributes_found'   => [],
+            'terms_created'      => [],
+            'images_imported'    => 0,
+        ];
+
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( __( 'Insufficient permissions.', 'wrai' ) );
         }
@@ -136,13 +145,20 @@ class WRAI_Importer {
             if ( ! $primary ) {
                 $primary = $items[0];
             }
-
             $parent_id_before = self::find_parent_by_group( $gid );
-            $parent_id = WRAI_Product::upsert_parent_product( $gid, $primary );
+            $parent_id        = WRAI_Product::upsert_parent_product( $gid, $primary );
 
             if ( ! $parent_id ) {
                 $errors[] = "Group {$gid}: parent product create/update failed.";
                 continue;
+            }
+
+            $parent_created = ! $parent_id_before;
+
+            if ( $parent_created ) {
+                $log_entries['parents_created']++;
+            } else {
+                $log_entries['parents_updated']++;
             }
 
             if ( $parent_id_before ) {
@@ -165,6 +181,7 @@ class WRAI_Importer {
                 );
 
                 if ( $primary_image_id ) {
+                    $log_entries['images_imported']++;
                     $gallery_image_ids[] = $primary_image_id;
                 }
             }
@@ -180,16 +197,34 @@ class WRAI_Importer {
                 $format_slug = '';
 
                 if ( $lang_name !== '' ) {
-                    $term = WRAI_Product::get_or_create_term( $tax_lang, $lang_name );
+                    $existing_lang_term = get_term_by( 'name', $lang_name, $tax_lang );
+                    $term               = WRAI_Product::get_or_create_term( $tax_lang, $lang_name );
                     if ( $term && ! is_wp_error( $term ) ) {
                         $lang_slug = $term->slug;
+
+                        if ( ! $existing_lang_term ) {
+                            $log_entries['attributes_found'][] = $tax_lang;
+                            $log_entries['terms_created']      = array_merge(
+                                $log_entries['terms_created'],
+                                [ $term->slug ]
+                            );
+                        }
                     }
                 }
 
                 if ( $format_name !== '' ) {
-                    $term = WRAI_Product::get_or_create_term( $tax_format, $format_name );
+                    $existing_format_term = get_term_by( 'name', $format_name, $tax_format );
+                    $term                 = WRAI_Product::get_or_create_term( $tax_format, $format_name );
                     if ( $term && ! is_wp_error( $term ) ) {
                         $format_slug = $term->slug;
+
+                        if ( ! $existing_format_term ) {
+                            $log_entries['attributes_found'][] = $tax_format;
+                            $log_entries['terms_created']      = array_merge(
+                                $log_entries['terms_created'],
+                                [ $term->slug ]
+                            );
+                        }
                     }
                 }
 
@@ -216,6 +251,7 @@ class WRAI_Importer {
                     );
 
                     if ( $variation_image_id ) {
+                        $log_entries['images_imported']++;
                         $gallery_image_ids[] = $variation_image_id;
                     }
                 }
@@ -227,6 +263,7 @@ class WRAI_Importer {
                             WRAI_Product::set_variation_attributes( $vid, $attr_map );
                         }
                         $variations++;
+                        $log_entries['variations_created']++;
                     }
                 } catch ( \Throwable $e ) {
                     $errors[] = 'Group ' . $gid . ': variation error - ' . $e->getMessage();
@@ -280,6 +317,9 @@ class WRAI_Importer {
             }
         }
 
+        $log_entries['attributes_found'] = array_values( array_unique( $log_entries['attributes_found'] ) );
+        $log_entries['terms_created']    = array_values( array_unique( $log_entries['terms_created'] ) );
+
         set_transient( 'wrai_fullimport_summary', [
             'groups'     => count( $groups ),
             'created'    => $created,
@@ -287,7 +327,10 @@ class WRAI_Importer {
             'variations' => $variations,
             'errors'     => $errors,
             'when'       => current_time( 'mysql' ),
+            'log_entries' => $log_entries,
         ], 30 * MINUTE_IN_SECONDS );
+
+        update_option( '_wrai_last_import_log', $log_entries );
 
         wp_safe_redirect( admin_url( 'admin.php?page=wrai-all-import&wrai_fullimport=1' ) );
         exit;
@@ -310,3 +353,32 @@ class WRAI_Importer {
         return get_transient( 'wrai_fullimport_summary' );
     }
 }
+
+add_action( 'admin_notices', function () {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+
+    $log = get_option( '_wrai_last_import_log' );
+    if ( empty( $log ) || ! is_array( $log ) ) {
+        return;
+    }
+
+    $parents_created    = intval( $log['parents_created'] ?? 0 );
+    $variations_imported = intval( $log['variations_created'] ?? 0 );
+    $attributes_found   = ! empty( $log['attributes_found'] ) && is_array( $log['attributes_found'] )
+        ? array_unique( array_filter( array_map( 'strval', $log['attributes_found'] ) ) )
+        : [];
+    $terms_created      = ! empty( $log['terms_created'] ) && is_array( $log['terms_created'] )
+        ? array_unique( array_filter( array_map( 'strval', $log['terms_created'] ) ) )
+        : [];
+    $images_imported    = intval( $log['images_imported'] ?? 0 );
+
+    echo '<div class="notice notice-success is-dismissible"><p><strong>WRAI Import Summary</strong></p><ul style="margin-left:1em;">';
+    echo '<li>✅ Parents Created: ' . esc_html( $parents_created ) . '</li>';
+    echo '<li>✅ Variations Imported: ' . esc_html( $variations_imported ) . '</li>';
+    echo '<li>🧩 Attributes: ' . esc_html( implode( ', ', $attributes_found ) ) . '</li>';
+    echo '<li>🏷️ Terms Created: ' . esc_html( implode( ', ', $terms_created ) ) . '</li>';
+    echo '<li>🖼️ Images Imported: ' . esc_html( $images_imported ) . '</li>';
+    echo '</ul></div>';
+} );
