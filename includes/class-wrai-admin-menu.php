@@ -48,6 +48,7 @@ class WRAI_Admin_Menu {
 
         $last = WRAI_Uploader::get_last_upload();
         $preview = ( isset( $_GET['wrai_preview'] ) && $_GET['wrai_preview'] == 1 ) ? WRAI_Parser::get_preview_data() : null;
+        $dryrun_summary = WRAI_Importer::get_summary();
 
         echo '<div class="wrap">';
         echo '<h1>All Import</h1>';
@@ -115,11 +116,20 @@ class WRAI_Admin_Menu {
             echo '<input type="hidden" name="action" value="wrai_dry_run" />';
             submit_button( __( 'Start Dry Run Import', 'wrai' ), 'primary', 'submit', false );
             echo '</form>';
+
+            if ( $dryrun_summary ) {
+                // Full Import button (only show if dry run happened)
+                echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="margin-top:10px;">';
+                wp_nonce_field( 'wrai_fullimport_nonce', 'wrai_fullimport_nonce_field' );
+                echo '<input type="hidden" name="action" value="wrai_full_import" />';
+                submit_button( __( 'Run Full Import (Create/Update Products)', 'wrai' ), 'primary', 'submit', false );
+                echo '</form>';
+            }
         }
 
         // Dry Run Summary Display
         if ( isset( $_GET['wrai_dryrun'] ) && $_GET['wrai_dryrun'] == 1 ) {
-            $summary = WRAI_Importer::get_summary();
+            $summary = $dryrun_summary;
             if ( $summary ) {
                 echo '<hr style="margin:24px 0;" />';
                 echo '<h2>Dry Run Summary</h2>';
@@ -136,6 +146,30 @@ class WRAI_Admin_Menu {
                     echo '</ul></div>';
                 } else {
                     echo '<div class="notice notice-success"><p>No missing fields detected. Ready for full import ✅</p></div>';
+                }
+            }
+        }
+
+        // Full Import Summary
+        if ( isset( $_GET['wrai_fullimport'] ) && $_GET['wrai_fullimport'] == 1 ) {
+            $sum = WRAI_Importer::get_fullimport_summary();
+            if ( $sum ) {
+                echo '<hr style="margin:24px 0;" />';
+                echo '<h2>Full Import Summary</h2>';
+                echo '<ul style="line-height:1.8">';
+                echo '<li><strong>Groups Processed:</strong> ' . esc_html( $sum['groups'] ) . '</li>';
+                echo '<li><strong>Parents Created:</strong> ' . esc_html( $sum['created'] ) . '</li>';
+                echo '<li><strong>Parents Updated:</strong> ' . esc_html( $sum['updated'] ) . '</li>';
+                echo '<li><strong>Total Variations:</strong> ' . esc_html( $sum['variations'] ) . '</li>';
+                echo '<li><strong>Time:</strong> ' . esc_html( $sum['when'] ) . '</li>';
+                echo '</ul>';
+
+                if ( ! empty( $sum['errors'] ) ) {
+                    echo '<div class="notice notice-error"><p><strong>Errors:</strong></p><ul>';
+                    foreach ( $sum['errors'] as $e ) { echo '<li>' . esc_html( $e ) . '</li>'; }
+                    echo '</ul></div>';
+                } else {
+                    echo '<div class="notice notice-success"><p>Import finished without errors. 🎉</p></div>';
                 }
             }
         }
