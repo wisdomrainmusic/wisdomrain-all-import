@@ -59,6 +59,10 @@ add_action( 'plugins_loaded', function() {
         if ( class_exists( 'WRAI_Parser' ) ) {
             new WRAI_Parser();
         }
+
+        if ( class_exists( 'WRAI_Importer' ) ) {
+            new WRAI_Importer();
+        }
     } else {
         add_action( 'admin_notices', function() {
             echo '<div class="notice notice-warning"><p><strong>Wisdom Rain All Import</strong> requires WooCommerce to be installed and active.</p></div>';

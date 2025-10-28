@@ -8,6 +8,7 @@ class WRAI_Admin_Menu {
 
         if ( class_exists( 'WRAI_Uploader' ) ) new WRAI_Uploader();
         if ( class_exists( 'WRAI_Parser' ) ) new WRAI_Parser();
+        if ( class_exists( 'WRAI_Importer' ) ) new WRAI_Importer();
     }
 
     public function register_menu_page() {
@@ -102,6 +103,41 @@ class WRAI_Admin_Menu {
             }
             echo '</tbody></table>';
             echo '</div>';
+        }
+
+        // Dry Run section
+        if ( $last && $preview ) {
+            echo '<hr style="margin:24px 0;" />';
+            echo '<h2>Dry Run Import</h2>';
+            echo '<p>Run a simulated import to analyze product groups and variations before creating products.</p>';
+            echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+            wp_nonce_field( 'wrai_dryrun_nonce', 'wrai_dryrun_nonce_field' );
+            echo '<input type="hidden" name="action" value="wrai_dry_run" />';
+            submit_button( __( 'Start Dry Run Import', 'wrai' ), 'primary', 'submit', false );
+            echo '</form>';
+        }
+
+        // Dry Run Summary Display
+        if ( isset( $_GET['wrai_dryrun'] ) && $_GET['wrai_dryrun'] == 1 ) {
+            $summary = WRAI_Importer::get_summary();
+            if ( $summary ) {
+                echo '<hr style="margin:24px 0;" />';
+                echo '<h2>Dry Run Summary</h2>';
+                echo '<ul style="line-height:1.8">';
+                echo '<li><strong>Total Product Groups:</strong> ' . esc_html( $summary['total_groups'] ) . '</li>';
+                echo '<li><strong>Total Variations:</strong> ' . esc_html( $summary['total_variations'] ) . '</li>';
+                echo '</ul>';
+
+                if ( ! empty( $summary['warnings'] ) ) {
+                    echo '<div class="notice notice-warning"><p><strong>Warnings:</strong></p><ul>';
+                    foreach ( $summary['warnings'] as $w ) {
+                        echo '<li>' . esc_html( $w ) . '</li>';
+                    }
+                    echo '</ul></div>';
+                } else {
+                    echo '<div class="notice notice-success"><p>No missing fields detected. Ready for full import ✅</p></div>';
+                }
+            }
         }
 
         echo '</div>';
