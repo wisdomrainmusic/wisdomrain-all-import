@@ -6,6 +6,18 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
  */
 class WRAI_Importer {
 
+    /**
+     * Collected URLs during the import process for post-run validation.
+     *
+     * @var array
+     */
+    private $collected_image_urls = [];
+
+    /**
+     * @var array
+     */
+    private $collected_file_urls = [];
+
     public function __construct() {
         add_action( 'admin_post_wrai_dry_run', [ $this, 'handle_dry_run' ] );
         add_action( 'admin_post_wrai_full_import', [ $this, 'handle_full_import' ] );
@@ -105,11 +117,23 @@ class WRAI_Importer {
         }
 
         $rows = [];
+        $this->collected_image_urls = [];
+        $this->collected_file_urls  = [];
         if ( ( $handle = fopen( $file['path'], 'r' ) ) !== false ) {
             $header = fgetcsv( $handle, 0, ',' );
             while ( ( $data = fgetcsv( $handle, 0, ',' ) ) !== false ) {
                 $row = array_combine( $header, $data );
                 if ( $row ) {
+                    if ( ! empty( $row['image_url'] ) ) {
+                        $this->collected_image_urls[] = esc_url_raw( trim( $row['image_url'] ) );
+                    }
+
+                    if ( ! empty( $row['file_urls'] ) ) {
+                        $file_parts = array_filter( array_map( 'trim', explode( ',', (string) $row['file_urls'] ) ) );
+                        foreach ( $file_parts as $file_url ) {
+                            $this->collected_file_urls[] = esc_url_raw( $file_url );
+                        }
+                    }
                     $rows[] = $row;
                 }
             }
@@ -320,6 +344,21 @@ class WRAI_Importer {
         $log_entries['attributes_found'] = array_values( array_unique( $log_entries['attributes_found'] ) );
         $log_entries['terms_created']    = array_values( array_unique( $log_entries['terms_created'] ) );
 
+        $this->collected_image_urls = array_values( array_unique( array_filter( $this->collected_image_urls ) ) );
+        $this->collected_file_urls  = array_values( array_unique( array_filter( $this->collected_file_urls ) ) );
+
+        $link_validation_summary = null;
+        if ( class_exists( 'WRAI_Link_Validator' ) ) {
+            $link_validation_summary = WRAI_Link_Validator::run([
+                'image_urls' => $this->collected_image_urls,
+                'file_urls'  => $this->collected_file_urls,
+            ]);
+
+            if ( $link_validation_summary ) {
+                $log_entries['link_validation'] = $link_validation_summary;
+            }
+        }
+
         set_transient( 'wrai_fullimport_summary', [
             'groups'     => count( $groups ),
             'created'    => $created,
@@ -328,6 +367,7 @@ class WRAI_Importer {
             'errors'     => $errors,
             'when'       => current_time( 'mysql' ),
             'log_entries' => $log_entries,
+            'link_validation' => $link_validation_summary,
         ], 30 * MINUTE_IN_SECONDS );
 
         update_option( '_wrai_last_import_log', $log_entries );
@@ -373,12 +413,42 @@ add_action( 'admin_notices', function () {
         ? array_unique( array_filter( array_map( 'strval', $log['terms_created'] ) ) )
         : [];
     $images_imported    = intval( $log['images_imported'] ?? 0 );
+    $link_validation    = isset( $log['link_validation'] ) && is_array( $log['link_validation'] )
+        ? $log['link_validation']
+        : null;
 
-    echo '<div class="notice notice-success is-dismissible"><p><strong>WRAI Import Summary</strong></p><ul style="margin-left:1em;">';
-    echo '<li>✅ Parents Created: ' . esc_html( $parents_created ) . '</li>';
-    echo '<li>✅ Variations Imported: ' . esc_html( $variations_imported ) . '</li>';
-    echo '<li>🧩 Attributes: ' . esc_html( implode( ', ', $attributes_found ) ) . '</li>';
-    echo '<li>🏷️ Terms Created: ' . esc_html( implode( ', ', $terms_created ) ) . '</li>';
-    echo '<li>🖼️ Images Imported: ' . esc_html( $images_imported ) . '</li>';
-    echo '</ul></div>';
+    $notice  = '<div class="notice notice-success is-dismissible">';
+    $notice .= '<p><strong>WRAI Import Summary</strong></p>';
+    $notice .= '<ul style="margin-left:1em;">';
+    $notice .= '<li>✅ Parents Created: ' . esc_html( $parents_created ) . '</li>';
+    $notice .= '<li>✅ Variations Imported: ' . esc_html( $variations_imported ) . '</li>';
+    $notice .= '<li>🧩 Attributes: ' . esc_html( implode( ', ', $attributes_found ) ) . '</li>';
+    $notice .= '<li>🏷️ Terms Created: ' . esc_html( implode( ', ', $terms_created ) ) . '</li>';
+    $notice .= '<li>🖼️ Images Imported: ' . esc_html( $images_imported ) . '</li>';
+    $notice .= '</ul>';
+
+    if ( $link_validation ) {
+        $links_checked = intval( $link_validation['total_checked'] ?? 0 );
+        $links_ok      = intval( $link_validation['ok'] ?? 0 );
+        $links_broken  = intval( $link_validation['broken'] ?? 0 );
+
+        $notice .= sprintf(
+            '<p>🔗 Links Checked: %d total, %d OK, %d broken</p>',
+            $links_checked,
+            $links_ok,
+            $links_broken
+        );
+
+        if ( $links_broken > 0 && ! empty( $link_validation['broken_list'] ) && is_array( $link_validation['broken_list'] ) ) {
+            $notice .= '<ul style="margin:0.5em 0 0 1.5em;">';
+            foreach ( $link_validation['broken_list'] as $item ) {
+                $notice .= '<li>' . esc_html( (string) $item ) . '</li>';
+            }
+            $notice .= '</ul>';
+        }
+    }
+
+    $notice .= '</div>';
+
+    echo $notice;
 } );
