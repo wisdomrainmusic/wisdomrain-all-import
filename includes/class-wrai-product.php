@@ -390,4 +390,75 @@ class WRAI_Product {
             update_post_meta( $variation_id, 'attribute_' . $taxonomy, sanitize_title( $slug ) );
         }
     }
+
+    /** Attach image from URL to product and set as featured */
+    public static function attach_image_from_url( $product_id, $image_url ) {
+        if ( ! $product_id || ! $image_url ) {
+            return false;
+        }
+
+        $image_url = esc_url_raw( $image_url );
+        if ( ! $image_url ) {
+            return false;
+        }
+
+        $image_id = 0;
+
+        $existing = get_posts([
+            'post_type'      => 'attachment',
+            'post_status'    => 'inherit',
+            'meta_key'       => '_wrai_src_url',
+            'meta_value'     => $image_url,
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+        ]);
+
+        if ( $existing ) {
+            $image_id = (int) $existing[0];
+        } else {
+            $image_id = attachment_url_to_postid( $image_url );
+        }
+
+        if ( ! $image_id ) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+            require_once ABSPATH . 'wp-admin/includes/media.php';
+            require_once ABSPATH . 'wp-admin/includes/image.php';
+
+            $tmp = download_url( $image_url );
+            if ( is_wp_error( $tmp ) ) {
+                return false;
+            }
+
+            if ( ! file_exists( $tmp ) ) {
+                return false;
+            }
+
+            $filename = wp_basename( parse_url( $image_url, PHP_URL_PATH ) ?: $image_url );
+            $filetype = wp_check_filetype( $filename );
+
+            $file = [
+                'name'     => $filename,
+                'type'     => $filetype['type'] ?? ( function_exists( 'mime_content_type' ) ? mime_content_type( $tmp ) : '' ),
+                'tmp_name' => $tmp,
+                'size'     => filesize( $tmp ) ?: 0,
+            ];
+
+            $image_id = media_handle_sideload( $file, $product_id );
+
+            if ( is_wp_error( $image_id ) ) {
+                @unlink( $tmp );
+                return false;
+            }
+
+            update_post_meta( $image_id, '_wrai_src_url', $image_url );
+        }
+
+        if ( is_wp_error( $image_id ) || ! $image_id ) {
+            return false;
+        }
+
+        set_post_thumbnail( $product_id, $image_id );
+
+        return (int) $image_id;
+    }
 }
