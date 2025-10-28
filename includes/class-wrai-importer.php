@@ -155,6 +155,20 @@ class WRAI_Importer {
                 WRAI_SEO::apply_rankmath_meta( $parent_id, $primary );
             }
 
+            $gallery_image_ids = [];
+            $primary_image_id  = 0;
+
+            if ( ! empty( $primary['image_url'] ) ) {
+                $primary_image_id = WRAI_Product::attach_image_from_url(
+                    $parent_id,
+                    esc_url_raw( $primary['image_url'] )
+                );
+
+                if ( $primary_image_id ) {
+                    $gallery_image_ids[] = $primary_image_id;
+                }
+            }
+
             foreach ( $items as $row ) {
                 $tax_lang   = 'pa_language';
                 $tax_format = 'pa_format';
@@ -195,6 +209,17 @@ class WRAI_Importer {
                     $attr_map[ $tax_format ] = sanitize_title( $format_name );
                 }
 
+                if ( ! empty( $row['image_url'] ) ) {
+                    $variation_image_id = WRAI_Product::attach_image_from_url(
+                        $parent_id,
+                        esc_url_raw( $row['image_url'] )
+                    );
+
+                    if ( $variation_image_id ) {
+                        $gallery_image_ids[] = $variation_image_id;
+                    }
+                }
+
                 try {
                     $vid = WRAI_Product::upsert_variation( $parent_id, $row, $attr_map );
                     if ( $vid ) {
@@ -208,8 +233,51 @@ class WRAI_Importer {
                 }
             }
 
+            if ( $gallery_image_ids ) {
+                $current_gallery = get_post_meta( $parent_id, '_product_image_gallery', true );
+                $current_ids     = [];
+
+                if ( is_string( $current_gallery ) && $current_gallery !== '' ) {
+                    $current_ids = array_map( 'intval', array_filter( array_map( 'trim', explode( ',', $current_gallery ) ) ) );
+                }
+
+                $featured_id = (int) get_post_thumbnail_id( $parent_id );
+
+                $merged = array_unique( array_map( 'intval', array_merge( $current_ids, $gallery_image_ids ) ) );
+                if ( $featured_id ) {
+                    $merged = array_values( array_diff( $merged, [ $featured_id ] ) );
+                }
+
+                if ( $merged ) {
+                    update_post_meta( $parent_id, '_product_image_gallery', implode( ',', $merged ) );
+                } else {
+                    delete_post_meta( $parent_id, '_product_image_gallery' );
+                }
+            }
+
+            if ( $primary_image_id ) {
+                set_post_thumbnail( $parent_id, $primary_image_id );
+            }
+
             // Tüm varyasyonlar oluşturulduktan sonra parent'ı finalize et
             WRAI_Product::finalize_variable_parent( $parent_id );
+        }
+
+        // Import işlemi tamamlandıktan sonra tüm parent ürünleri yeniden sync et
+        $parents = get_posts([
+            'post_type'   => 'product',
+            'post_status' => 'publish',
+            'fields'      => 'ids',
+            'numberposts' => -1,
+        ]);
+
+        foreach ( $parents as $pid ) {
+            wp_cache_delete( $pid, 'posts' );
+            clean_post_cache( $pid );
+
+            if ( class_exists( 'WC_Product_Variable' ) ) {
+                WC_Product_Variable::sync( $pid );
+            }
         }
 
         set_transient( 'wrai_fullimport_summary', [
