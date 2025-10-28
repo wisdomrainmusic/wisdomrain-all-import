@@ -100,17 +100,19 @@ class WRAI_Product {
             if ( is_wp_error( $product_id ) ) return 0;
 
             update_post_meta( $product_id, '_wrai_group_id', $group_id );
-            update_post_meta( $product_id, '_visibility', 'visible' );
 
-            $product = wc_get_product( $product_id );
-            if ( $product && is_a( $product, 'WC_Product' ) ) {
-                $product->set_catalog_visibility( 'visible' );
-                $product->set_sold_individually( false );
-                $product->set_manage_stock( false );
-                $product->set_status( 'publish' );
-                $product->set_type( 'variable' );
-                $product->save();
-            }
+            // Ürünü variable type olarak ayarla
+            wp_set_object_terms( $product_id, 'variable', 'product_type' );
+
+            // WooCommerce metadata ayarları
+            update_post_meta( $product_id, '_visibility', 'visible' );
+            update_post_meta( $product_id, '_catalog_visibility', 'visible' );
+            wp_set_object_terms( $product_id, 'visible', 'product_visibility' );
+            update_post_meta( $product_id, '_stock_status', 'instock' );
+            update_post_meta( $product_id, '_manage_stock', 'no' );
+            update_post_meta( $product_id, '_sold_individually', 'no' );
+            update_post_meta( $product_id, '_virtual', 'no' );
+            update_post_meta( $product_id, '_downloadable', 'no' );
         } else {
             // Update content/excerpt if provided
             if ( ! empty( $row['product_description'] ) ) {
