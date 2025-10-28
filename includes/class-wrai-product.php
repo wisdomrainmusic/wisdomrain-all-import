@@ -306,8 +306,24 @@ class WRAI_Product {
         }
 
         $var->set_status( 'publish' );
-        
+
         $var->save();
         return $var->get_id();
+    }
+
+    /** Force parent to variable and sync its children/attributes */
+    public static function finalize_variable_parent( $product_id ) {
+        if ( ! $product_id ) return;
+
+        // Tipi garanti altına al
+        wp_set_object_terms( $product_id, 'variable', 'product_type' );
+
+        // Parent attribute meta'sının kalıcı olduğundan emin ol
+        self::ensure_parent_attributes( $product_id );
+
+        // Woo tarafında tüm varyasyon ve attribute senkronizasyonu
+        if ( class_exists( 'WC_Product_Variable' ) ) {
+            WC_Product_Variable::sync( $product_id );
+        }
     }
 }

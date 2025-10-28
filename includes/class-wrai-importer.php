@@ -165,6 +165,9 @@ class WRAI_Importer {
                     $errors[] = 'Group ' . $gid . ': variation error - ' . $e->getMessage();
                 }
             }
+
+            // Tüm varyasyonlar oluşturulduktan sonra parent'ı finalize et
+            WRAI_Product::finalize_variable_parent( $parent_id );
         }
 
         set_transient( 'wrai_fullimport_summary', [
