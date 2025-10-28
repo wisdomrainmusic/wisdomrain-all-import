@@ -156,9 +156,51 @@ class WRAI_Importer {
             }
 
             foreach ( $items as $row ) {
+                $tax_lang   = 'pa_language';
+                $tax_format = 'pa_format';
+
+                $lang_name   = trim( (string) ( $row['language'] ?? '' ) );
+                $format_name = trim( (string) ( $row['format'] ?? '' ) );
+
+                $lang_slug   = '';
+                $format_slug = '';
+
+                if ( $lang_name !== '' ) {
+                    $term = WRAI_Product::get_or_create_term( $tax_lang, $lang_name );
+                    if ( $term && ! is_wp_error( $term ) ) {
+                        $lang_slug = $term->slug;
+                    }
+                }
+
+                if ( $format_name !== '' ) {
+                    $term = WRAI_Product::get_or_create_term( $tax_format, $format_name );
+                    if ( $term && ! is_wp_error( $term ) ) {
+                        $format_slug = $term->slug;
+                    }
+                }
+
+                $attr_map = [];
+
+                if ( $lang_slug ) {
+                    $attr_map[ $tax_lang ] = $lang_slug;
+                    WRAI_Product::ensure_parent_attribute_value( $parent_id, $tax_lang, $lang_slug );
+                } elseif ( $lang_name !== '' ) {
+                    $attr_map[ $tax_lang ] = sanitize_title( $lang_name );
+                }
+
+                if ( $format_slug ) {
+                    $attr_map[ $tax_format ] = $format_slug;
+                    WRAI_Product::ensure_parent_attribute_value( $parent_id, $tax_format, $format_slug );
+                } elseif ( $format_name !== '' ) {
+                    $attr_map[ $tax_format ] = sanitize_title( $format_name );
+                }
+
                 try {
-                    $vid = WRAI_Product::upsert_variation( $parent_id, $row );
+                    $vid = WRAI_Product::upsert_variation( $parent_id, $row, $attr_map );
                     if ( $vid ) {
+                        if ( $attr_map ) {
+                            WRAI_Product::set_variation_attributes( $vid, $attr_map );
+                        }
                         $variations++;
                     }
                 } catch ( \Throwable $e ) {

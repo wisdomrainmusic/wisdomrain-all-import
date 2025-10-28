@@ -221,7 +221,7 @@ class WRAI_Product {
     }
 
     /** Create or update a single variation for (language, format) */
-    public static function upsert_variation( $parent_id, $row ) {
+    public static function upsert_variation( $parent_id, $row, $attribute_slugs = [] ) {
         $price_regular_raw = str_replace( ',', '.', (string) ( $row['price_regular'] ?? '' ) );
         $price_sale_raw    = str_replace( ',', '.', (string) ( $row['price_sale'] ?? '' ) );
         $price_regular     = $price_regular_raw !== '' ? wc_format_decimal( $price_regular_raw ) : '';
@@ -235,10 +235,21 @@ class WRAI_Product {
         $language      = (string)( $row['language'] ?? '' );
         $format        = (string)( $row['format'] ?? '' );
 
-        // Ensure terms
-        $terms = self::ensure_attributes_and_terms( $language, $format );
-        $attr_lang  = $terms['language'];
-        $attr_format= $terms['format'];
+        $tax_lang   = 'pa_language';
+        $tax_format = 'pa_format';
+
+        $attr_lang   = sanitize_title( $attribute_slugs[ $tax_lang ] ?? '' );
+        $attr_format = sanitize_title( $attribute_slugs[ $tax_format ] ?? '' );
+
+        if ( ! $attr_lang || ! $attr_format ) {
+            $terms = self::ensure_attributes_and_terms( $language, $format );
+            if ( ! $attr_lang ) {
+                $attr_lang = $terms['language'];
+            }
+            if ( ! $attr_format ) {
+                $attr_format = $terms['format'];
+            }
+        }
 
         // Find existing variation by attributes
         $existing_id = 0;
@@ -253,8 +264,8 @@ class WRAI_Product {
             $v = wc_get_product( $vid );
             if ( ! $v ) continue;
             $atts = $v->get_attributes();
-            $lang_ok  = ( $atts['pa_language'] ?? '' ) === $attr_lang;
-            $fmt_ok   = ( $atts['pa_format']   ?? '' ) === $attr_format;
+            $lang_ok  = ( $atts[ $tax_lang ] ?? '' ) === $attr_lang;
+            $fmt_ok   = ( $atts[ $tax_format ] ?? '' ) === $attr_format;
             if ( $lang_ok && $fmt_ok ) { $existing_id = $vid; break; }
         }
 
@@ -267,8 +278,8 @@ class WRAI_Product {
 
         // Attributes
         $var->set_attributes([
-            'pa_language' => $attr_lang,
-            'pa_format'   => $attr_format,
+            $tax_lang   => $attr_lang,
+            $tax_format => $attr_format,
         ]);
 
         // Prices & stock
@@ -326,6 +337,57 @@ class WRAI_Product {
         // Woo tarafında tüm varyasyon ve attribute senkronizasyonu
         if ( class_exists( 'WC_Product_Variable' ) ) {
             WC_Product_Variable::sync( $product_id );
+        }
+    }
+
+    /** Get or create a term for a given taxonomy by its human name */
+    public static function get_or_create_term( $taxonomy, $name ) {
+        if ( ! $taxonomy || ! $name ) return false;
+        $term = get_term_by( 'name', $name, $taxonomy );
+        if ( $term && ! is_wp_error( $term ) ) return $term;
+
+        $slug = sanitize_title( $name );
+        $res  = wp_insert_term( $name, $taxonomy, [ 'slug' => $slug ] );
+        if ( is_wp_error( $res ) ) return false;
+        return get_term( $res['term_id'] );
+    }
+
+    /** Add a term to product and mark it in product attributes (variation=1, visible=1) */
+    public static function ensure_parent_attribute_value( $product_id, $taxonomy, $term_slug ) {
+        if ( ! $product_id || ! $taxonomy || ! $term_slug ) return;
+
+        // 1) Ürüne bu taxonomy terimini set et (append=true)
+        wp_set_object_terms( $product_id, [ $term_slug ], $taxonomy, true );
+
+        // 2) _product_attributes meta’sını güncelle
+        $attrs = get_post_meta( $product_id, '_product_attributes', true );
+        if ( ! is_array( $attrs ) ) $attrs = [];
+
+        $position = isset( $attrs[ $taxonomy ]['position'] ) ? (int) $attrs[ $taxonomy ]['position'] : count( $attrs );
+
+        // Woo: attribute key olarak taxonomy adı (pa_language) bekliyor
+        $attrs[ $taxonomy ] = [
+            'name'         => $taxonomy,
+            // value alanı pipeline ile ayrılmış slug listesi ya da text olabilir.
+            // Biz taxonomy kullandığımız için boş bırakmak da sorun olmaz;
+            // yine de görünürlük/variation flag’lerini işaretliyoruz.
+            'value'        => '',
+            'position'     => $position,
+            'is_visible'   => 1,
+            'is_variation' => 1,
+            'is_taxonomy'  => 1,
+        ];
+
+        update_post_meta( $product_id, '_product_attributes', $attrs );
+    }
+
+    /** Set variation attributes (attribute_pa_language => slug, attribute_pa_format => slug) */
+    public static function set_variation_attributes( $variation_id, $map ) {
+        if ( ! $variation_id || ! is_array( $map ) ) return;
+        foreach ( $map as $taxonomy => $slug ) {
+            if ( ! $taxonomy || ! $slug ) continue;
+            // WooCommerce meta key formatı: attribute_{taxonomy}
+            update_post_meta( $variation_id, 'attribute_' . $taxonomy, sanitize_title( $slug ) );
         }
     }
 }
