@@ -1,18 +1,13 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
-/**
- * Class WRAI_Admin_Menu
- * Handles admin menu and initial UI
- */
 class WRAI_Admin_Menu {
 
     public function __construct() {
-        add_action( 'admin_menu', array( $this, 'register_menu_page' ) );
-        // Ensure uploader is initialized
-        if ( class_exists( 'WRAI_Uploader' ) ) {
-            new WRAI_Uploader();
-        }
+        add_action( 'admin_menu', [ $this, 'register_menu_page' ] );
+
+        if ( class_exists( 'WRAI_Uploader' ) ) new WRAI_Uploader();
+        if ( class_exists( 'WRAI_Parser' ) ) new WRAI_Parser();
     }
 
     public function register_menu_page() {
@@ -21,7 +16,7 @@ class WRAI_Admin_Menu {
             __( 'Wisdom Rain', 'wrai' ),
             'manage_options',
             'wrai-dashboard',
-            array( $this, 'render_dashboard' ),
+            [ $this, 'render_dashboard' ],
             'dashicons-database-import',
             56
         );
@@ -32,7 +27,7 @@ class WRAI_Admin_Menu {
             __( 'All Import', 'wrai' ),
             'manage_options',
             'wrai-all-import',
-            array( $this, 'render_all_import' )
+            [ $this, 'render_all_import' ]
         );
     }
 
@@ -50,16 +45,18 @@ class WRAI_Admin_Menu {
             echo '<p>' . esc_html( rawurldecode( $_GET['wrai_note'] ) ) . '</p></div>';
         }
 
-        $last = class_exists('WRAI_Uploader') ? WRAI_Uploader::get_last_upload() : null;
+        $last = WRAI_Uploader::get_last_upload();
+        $preview = ( isset( $_GET['wrai_preview'] ) && $_GET['wrai_preview'] == 1 ) ? WRAI_Parser::get_preview_data() : null;
 
         echo '<div class="wrap">';
         echo '<h1>All Import</h1>';
         echo '<p>Upload your CSV/Excel to start the import process.</p>';
 
+        // Upload form
         echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" enctype="multipart/form-data" style="margin-top:16px;">';
         wp_nonce_field( 'wrai_upload_nonce', 'wrai_upload_nonce_field' );
         echo '<input type="hidden" name="action" value="wrai_upload" />';
-        echo '<input type="file" name="wrai_import_file" accept=".csv, .xlsx, .xls" required />';
+        echo '<input type="file" name="wrai_import_file" accept=".csv,.xlsx,.xls" required />';
         submit_button( __( 'Upload File', 'wrai' ), 'primary', 'submit', false );
         echo '</form>';
 
@@ -74,9 +71,37 @@ class WRAI_Admin_Menu {
             echo '<li><strong>Time:</strong> ' . esc_html( $last['time'] ) . '</li>';
             echo '<li><strong>URL:</strong> <a href="' . esc_url( $last['url'] ) . '" target="_blank" rel="noopener">Open</a></li>';
             echo '</ul>';
-            echo '<p style="opacity:.7">Next step: parse this file into batches and start import.</p>';
+
+            echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="margin-top:10px;">';
+            wp_nonce_field( 'wrai_preview_nonce', 'wrai_preview_nonce_field' );
+            echo '<input type="hidden" name="action" value="wrai_preview" />';
+            submit_button( __( 'Preview First 10 Rows', 'wrai' ), 'secondary', 'submit', false );
+            echo '</form>';
         } else {
             echo '<p>No uploads yet.</p>';
+        }
+
+        // Preview table
+        if ( $preview && isset( $preview['rows'] ) ) {
+            echo '<hr style="margin:24px 0;" />';
+            echo '<h2>Preview (First 10 Rows)</h2>';
+            echo '<p>Total Lines: <strong>' . esc_html( $preview['summary']['total_lines'] ) . '</strong> | ';
+            echo 'Unique Groups: <strong>' . esc_html( $preview['summary']['unique_groups'] ) . '</strong></p>';
+            echo '<div style="overflow:auto; max-height:500px;">';
+            echo '<table class="widefat striped"><thead><tr>';
+            foreach ( $preview['header'] as $h ) {
+                echo '<th>' . esc_html( $h ) . '</th>';
+            }
+            echo '</tr></thead><tbody>';
+            foreach ( $preview['rows'] as $r ) {
+                echo '<tr>';
+                foreach ( $r as $cell ) {
+                    echo '<td>' . esc_html( $cell ) . '</td>';
+                }
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+            echo '</div>';
         }
 
         echo '</div>';
