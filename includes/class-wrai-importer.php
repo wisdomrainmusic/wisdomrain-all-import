@@ -199,7 +199,7 @@ class WRAI_Importer {
             $primary_image_id  = 0;
 
             if ( ! empty( $primary['image_url'] ) ) {
-                $primary_image_id = WRAI_Product::attach_image_from_url(
+                $primary_image_id = $this->handle_product_image(
                     $parent_id,
                     esc_url_raw( $primary['image_url'] )
                 );
@@ -269,7 +269,7 @@ class WRAI_Importer {
                 }
 
                 if ( ! empty( $row['image_url'] ) ) {
-                    $variation_image_id = WRAI_Product::attach_image_from_url(
+                    $variation_image_id = $this->handle_product_image(
                         $parent_id,
                         esc_url_raw( $row['image_url'] )
                     );
@@ -374,6 +374,80 @@ class WRAI_Importer {
 
         wp_safe_redirect( admin_url( 'admin.php?page=wrai-all-import&wrai_fullimport=1' ) );
         exit;
+    }
+
+    private function handle_product_image( $product_id, $image_url, $keys = null, $values = null ) {
+        if ( ! $product_id || ! $image_url ) {
+            return 0;
+        }
+
+        $image_url = esc_url_raw( $image_url );
+        if ( ! $image_url ) {
+            return 0;
+        }
+
+        $meta_data = [];
+
+        // 🧩 Safe Image Deduplication – v1.1
+        if ( ! empty( $image_url ) ) {
+
+            // 🟡 Step 1: Check if image already exists in Media Library
+            $existing_id = attachment_url_to_postid( $image_url );
+
+            if ( $existing_id && $existing_id > 0 ) {
+                set_post_thumbnail( $product_id, $existing_id );
+                error_log("🟢 Existing image reused: $image_url (ID: $existing_id)");
+                return (int) $existing_id; // Skip re-download
+            }
+
+            // 🟠 Step 2: Defensive array_combine protection
+            if ( isset( $keys ) && isset( $values ) ) {
+                if ( empty( $keys ) || empty( $values ) || count( $keys ) !== count( $values ) ) {
+                    error_log("⚠️ WRAI: Skipping array_combine due to mismatched keys/values in image handler.");
+                    $meta_data = [];
+                } else {
+                    $meta_data = array_combine( $keys, $values );
+                }
+            }
+        }
+
+        $existing = get_posts([
+            'post_type'      => 'attachment',
+            'post_status'    => 'inherit',
+            'meta_key'       => '_wrai_src_url',
+            'meta_value'     => $image_url,
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+        ]);
+
+        if ( $existing ) {
+            $existing_id = (int) $existing[0];
+            set_post_thumbnail( $product_id, $existing_id );
+            return $existing_id;
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        $attachment_id = media_sideload_image( $image_url, $product_id, null, 'id' );
+
+        if ( is_wp_error( $attachment_id ) ) {
+            return 0;
+        }
+
+        if ( $meta_data ) {
+            foreach ( $meta_data as $meta_key => $meta_value ) {
+                if ( $meta_key !== '' ) {
+                    update_post_meta( $attachment_id, sanitize_key( $meta_key ), $meta_value );
+                }
+            }
+        }
+
+        update_post_meta( $attachment_id, '_wrai_src_url', $image_url );
+        set_post_thumbnail( $product_id, (int) $attachment_id );
+
+        return (int) $attachment_id;
     }
 
     private static function find_parent_by_group( $group_id ) {
