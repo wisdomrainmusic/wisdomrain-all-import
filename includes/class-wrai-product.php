@@ -191,6 +191,15 @@ class WRAI_Product {
         require_once ABSPATH . 'wp-admin/includes/file.php';
         require_once ABSPATH . 'wp-admin/includes/media.php';
         require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        // 🧩 Check if image already exists in Media Library
+        $existing_id = attachment_url_to_postid( $url );
+        if ( $existing_id ) {
+            set_post_thumbnail( $product_id, $existing_id );
+            error_log( "🟢 Existing image reused: {$url} (ID: {$existing_id})" );
+            return;
+        }
+
         $attach_id = media_sideload_image( $url, $product_id, null, 'id' );
         if ( ! is_wp_error( $attach_id ) ) {
             update_post_meta( $attach_id, '_wrai_src_url', $url );
