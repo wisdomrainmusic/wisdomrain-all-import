@@ -280,14 +280,65 @@ class WRAI_Importer {
                     }
                 }
 
+                $update_mode = self::normalize_update_mode( $row['update_mode'] ?? 'auto' );
+                $row['update_mode'] = $update_mode;
+
+                $existing_variations = self::find_existing_variations( $parent_id, $attr_map );
+
                 try {
-                    $vid = WRAI_Product::upsert_variation( $parent_id, $row, $attr_map );
-                    if ( $vid ) {
+                    $action       = null;
+                    $variation_id = 0;
+
+                    switch ( $update_mode ) {
+                        case 'update_only':
+                            if ( $existing_variations ) {
+                                $variation_id = self::update_variation( $parent_id, $row, $attr_map );
+                                $action       = 'update';
+                            } else {
+                                error_log( '⚪ Skipped creation because update_only mode found no existing variation' );
+                            }
+                            break;
+
+                        case 'create_only':
+                            if ( ! $existing_variations ) {
+                                $variation_id = self::create_variation( $parent_id, $row, $attr_map );
+                                $action       = 'create';
+                            } else {
+                                $first_existing = reset( $existing_variations );
+                                $existing_id    = ( is_object( $first_existing ) && method_exists( $first_existing, 'get_id' ) )
+                                    ? (int) $first_existing->get_id()
+                                    : 0;
+                                if ( $existing_id ) {
+                                    error_log( "⚪ Skipped update for existing variation {$existing_id} due to create_only mode" );
+                                } else {
+                                    error_log( '⚪ Skipped update for existing variation due to create_only mode' );
+                                }
+                            }
+                            break;
+
+                        default:
+                            if ( $existing_variations ) {
+                                $variation_id = self::update_variation( $parent_id, $row, $attr_map );
+                                $action       = 'update';
+                            } else {
+                                $variation_id = self::create_variation( $parent_id, $row, $attr_map );
+                                $action       = 'create';
+                            }
+                            break;
+                    }
+
+                    if ( $variation_id ) {
                         if ( $attr_map ) {
-                            WRAI_Product::set_variation_attributes( $vid, $attr_map );
+                            WRAI_Product::set_variation_attributes( $variation_id, $attr_map );
                         }
-                        $variations++;
-                        $log_entries['variations_created']++;
+
+                        if ( $action ) {
+                            $variations++;
+                        }
+
+                        if ( 'create' === $action ) {
+                            $log_entries['variations_created']++;
+                        }
                     }
                 } catch ( \Throwable $e ) {
                     $errors[] = 'Group ' . $gid . ': variation error - ' . $e->getMessage();
@@ -391,6 +442,64 @@ class WRAI_Importer {
 
     public static function get_fullimport_summary() {
         return get_transient( 'wrai_fullimport_summary' );
+    }
+
+    private static function normalize_update_mode( $mode ) {
+        $mode = strtolower( trim( (string) $mode ) );
+
+        if ( function_exists( 'sanitize_key' ) ) {
+            $mode = sanitize_key( $mode );
+        }
+
+        if ( ! in_array( $mode, [ 'auto', 'update_only', 'create_only' ], true ) ) {
+            return 'auto';
+        }
+
+        return $mode;
+    }
+
+    private static function find_existing_variations( $parent_id, array $attribute_slugs ) {
+        if ( ! function_exists( 'wc_get_products' ) ) {
+            return [];
+        }
+
+        $meta_query = [];
+
+        foreach ( $attribute_slugs as $taxonomy => $slug ) {
+            $slug = (string) $slug;
+
+            if ( $slug === '' ) {
+                continue;
+            }
+
+            $meta_query[] = [
+                'key'   => 'attribute_' . $taxonomy,
+                'value' => $slug,
+            ];
+        }
+
+        if ( ! $meta_query ) {
+            return [];
+        }
+
+        if ( count( $meta_query ) > 1 ) {
+            $meta_query = array_merge( [ 'relation' => 'AND' ], $meta_query );
+        }
+
+        return wc_get_products([
+            'parent'     => $parent_id,
+            'type'       => 'variation',
+            'limit'      => -1,
+            'meta_query' => $meta_query,
+        ]);
+    }
+
+    private static function update_variation( $parent_id, $row, array $attribute_slugs ) {
+        return WRAI_Product::upsert_variation( $parent_id, $row, $attribute_slugs );
+    }
+
+    private static function create_variation( $parent_id, $row, array $attribute_slugs ) {
+        return WRAI_Product::upsert_variation( $parent_id, $row, $attribute_slugs );
     }
 }
 
