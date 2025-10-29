@@ -234,10 +234,6 @@ class WRAI_Product {
         $file_urls     = trim( (string)( $row['file_urls'] ?? '' ) );
         $language      = (string)( $row['language'] ?? '' );
         $format        = (string)( $row['format'] ?? '' );
-        $update_mode   = strtolower( sanitize_key( $row['update_mode'] ?? 'auto' ) );
-        if ( ! in_array( $update_mode, [ 'auto', 'update_only', 'create_only' ], true ) ) {
-            $update_mode = 'auto';
-        }
 
         $tax_lang   = 'pa_language';
         $tax_format = 'pa_format';
@@ -255,73 +251,30 @@ class WRAI_Product {
             }
         }
 
-        $attribute_map = [
-            'attribute_' . $tax_lang   => $attr_lang,
-            'attribute_' . $tax_format => $attr_format,
-        ];
-
-        $variation_data = [
-            'attributes'    => $attribute_map,
-            'regular_price' => $price_regular,
-            'sale_price'    => $price_sale,
-            'stock_status'  => $stock_status,
-            'file_urls'     => $file_urls,
-        ];
-
-        $existing_variations = wc_get_products([
-            'parent'     => $parent_id,
-            'type'       => 'variation',
-            'limit'      => -1,
-            'meta_query' => [
-                'relation' => 'AND',
-                [
-                    'key'   => 'attribute_' . $tax_lang,
-                    'value' => $attribute_map[ 'attribute_' . $tax_lang ],
-                ],
-                [
-                    'key'   => 'attribute_' . $tax_format,
-                    'value' => $attribute_map[ 'attribute_' . $tax_format ],
-                ],
-            ],
+        // Find existing variation by attributes
+        $existing_id = 0;
+        $children = wc_get_products([
+            'status'    => array_map( 'wc_clean', [ 'publish', 'private' ] ),
+            'type'      => 'variation',
+            'parent'    => $parent_id,
+            'limit'     => -1,
+            'return'    => 'ids',
         ]);
-
-        if ( ! empty( $existing_variations ) ) {
-            $variation    = reset( $existing_variations );
-            $variation_id = $variation->get_id();
-
-            if ( 'create_only' === $update_mode ) {
-                error_log( "⚪ Skipped update for existing variation {$variation_id} due to create_only mode" );
-                return $variation_id;
-            }
-
-            if ( $variation_data['regular_price'] !== '' ) {
-                $variation->set_regular_price( $variation_data['regular_price'] );
-            }
-
-            if ( $variation_data['sale_price'] !== '' ) {
-                $variation->set_sale_price( $variation_data['sale_price'] );
-            } else {
-                $variation->set_sale_price( '' );
-            }
-
-            $variation->set_stock_status( $variation_data['stock_status'] );
-
-            self::apply_downloads_to_variation( $variation, $variation_data['file_urls'], $row );
-            $variation->update_meta_data( '_file_urls', $variation_data['file_urls'] );
-
-            $variation->save();
-
-            error_log( "🟢 Updated existing variation: {$variation_id}" );
-            return $variation_id;
+        foreach ( $children as $vid ) {
+            $v = wc_get_product( $vid );
+            if ( ! $v ) continue;
+            $atts = $v->get_attributes();
+            $lang_ok  = ( $atts[ $tax_lang ] ?? '' ) === $attr_lang;
+            $fmt_ok   = ( $atts[ $tax_format ] ?? '' ) === $attr_format;
+            if ( $lang_ok && $fmt_ok ) { $existing_id = $vid; break; }
         }
 
-        if ( 'update_only' === $update_mode ) {
-            error_log( '⚪ Skipped creation because update_only mode found no existing variation' );
-            return 0;
+        if ( $existing_id ) {
+            $var = wc_get_product( $existing_id );
+        } else {
+            $var = new WC_Product_Variation();
+            $var->set_parent_id( $parent_id );
         }
-
-        $var = new WC_Product_Variation();
-        $var->set_parent_id( $parent_id );
 
         // Attributes
         $var->set_attributes([
@@ -340,32 +293,17 @@ class WRAI_Product {
         }
         $var->set_stock_status( $stock_status );
 
-        self::apply_downloads_to_variation( $var, $file_urls, $row );
-        $var->update_meta_data( '_file_urls', $file_urls );
-
-        $var->set_status( 'publish' );
-
-        $var->save();
-        return $var->get_id();
-    }
-
-    private static function apply_downloads_to_variation( $variation, $file_urls, $row ) {
-        if ( ! $variation instanceof WC_Product_Variation ) {
-            return;
-        }
-
+        // Downloadable files
         if ( $file_urls !== '' ) {
-            $variation->set_downloadable( true );
-            $variation->set_virtual( true );
+            $var->set_downloadable( true );
+            $var->set_virtual( true );
             $downloads = [];
 
             // Support multiple files separated by comma
             $parts = array_map( 'trim', explode( ',', $file_urls ) );
             $i = 1;
             foreach ( $parts as $u ) {
-                if ( ! $u ) {
-                    continue;
-                }
+                if ( ! $u ) continue;
                 $dl = new WC_Product_Download();
                 $dl->set_id( uniqid( 'wrai_', true ) );
                 $dl->set_name( ( $row['product_title'] ?? 'file' ) . ' ' . $i );
@@ -373,12 +311,17 @@ class WRAI_Product {
                 $downloads[ $dl->get_id() ] = $dl;
                 $i++;
             }
-            $variation->set_downloads( $downloads );
+            $var->set_downloads( $downloads );
         } else {
-            $variation->set_downloadable( false );
-            $variation->set_virtual( false );
-            $variation->set_downloads( [] );
+            $var->set_downloadable( false );
+            $var->set_virtual( false );
+            $var->set_downloads( [] );
         }
+
+        $var->set_status( 'publish' );
+
+        $var->save();
+        return $var->get_id();
     }
 
     /** Force parent to variable and sync its children/attributes */
